@@ -340,6 +340,15 @@ De esta forma podriamos determinar de una forma coherente cual sería el punto de
 Cómo hemos podido observar, existe una clara relación entre los inmuebles que reciben un descuento sobre su precio inicial y sus características principales, tales como el precio, metros cuadrados, zona, habitaciones, planta (en caso de ser un piso), etc.
 En función de estas relaciones, a priori desconocidas, hemos podido generar un modelo *machine learning*. Debido a la cantidad de datos disponible, podemos concluir que el modelo propociona un resultado aceptable a la hora de clasificar **si un inmueble en venta en el municipio de Barcelona va a bajar de precio**. Por lo que se considera que se dá respuesta a la pregunta inicial planteada. Aunque, hay que tener en cuenta que si realizaramos este ejercicio con una cantidad de datos mayor seguramente mejoraría la calidad de la respuesta proporcionada.
 
+Finalmente, exportamos los datos tratados junto a la respuesta del modelo (probabilidad de que el inmueble baje de precio).
+
+```{r export}
+df$prob <- predict(rf, df, type = "prob")[,2]
+fwrite(df, "..\\data\\dataset_out.csv")
+```
+
+
+
 
 # Código
 

@@ -163,3 +163,6 @@ gini
 plot(roc_val,col='blue')
 
 kable(table.resume(discretize(pred, "interval", 10), test$target))
+
+df$prob <- predict(rf, df, type = "prob")[,2]
+fwrite(df, "C:\\Users\\User\\Documents\\Master Ciencia de Datos\\Tipologia y Ciclo de Vida de los Datos\\Practica2\\data\\dataset_out.csv")
