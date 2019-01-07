@@ -1,0 +1,349 @@
+---
+title: 'Práctica 2: Limpieza y validación de los datos'
+author: "Adrián Quijada Gomariz"
+date: '`r format(Sys.Date(),"%e de %B, %Y")`'
+output:
+  pdf_document:
+    number_sections: yes
+    toc: yes
+  html_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load_libraries, include=FALSE}
+library(data.table)
+library(class)
+library(readxl)
+library(car)
+library(randomForest)
+library(arules)
+library(knitr)
+library(pROC)
+```
+
+# Descripción del dataset.
+
+```{r lectura, echo=TRUE}
+df <- fread("..\\data\\dataset.csv", encoding = 'UTF-8')
+clase <- sapply(df, class)
+kable(data.frame(variable=names(clase), class=as.vector(clase)))
+```
+
+El dataset contiene información sobre los `r nrow(df)` inmuebles en venta dentro del municipio de Barcelona a fecha `r unique(df$date)`. Para crearlo se ha usado una versión extendida del _crawler_ desarrollado en la ${Práctica \ 1}^{1}$.
+
+Como se puede observar, contiene información sobre:
+
+- La fecha de descarga del anuncio.
+- Planta del inmueble (en caso de ser un piso).
+- Si tiene garaje asociado.
+- Link de la publicación.
+- Metros cuadrados del inmueble.
+- Descuento sobre el precio publicado inicialmente.
+- Precio del inmueble.
+- Número de habitaciones.
+- Titulo del anuncio, de donde se puede extraer la zona.
+
+Con esta información nos podríamos preguntar: **¿es el momento idóneo para comprar un inmueble? ¿es posible que baje de precio?** Precisamente, a este tipo de preguntas es a las que el modelo pretende dar respuesta.
+
+Para ello se genera la variable respuesta dicotómica que tomará un valor positivo para los inmuebles que hayan sufrido un descuento y un valor negativo para aquellos que no:
+
+
+```{r target}
+df$target <- ifelse(df$off > 0, 1, 0)
+df$target <- as.factor(df$target)
+kable(table(df$target))
+```
+
+Por lo consiguiente, se genera una variable categórica que representa que a fecha `r unique(df$date)`, el **`r round(prop.table(table(df$target))[2]*100)`%** de los anuncios publicados han sufrido un descuento en su precio inicial propuesto.
+
+Aunque nuestra variable respuesta esté claramente desbalanceada, se procederá a generar un modelo de aprendizaje automático que intentará discriminar entre las distintas propiedades de un inmueble para dar respuesta a las preguntas planteadas.
+
+# Integración y selección de los datos de interés a analizar.
+
+Para el desarrollo del modelo usaremos todas las variables disponibles salvo aquellas que no tienen una relación lógica con la variable respuesta. Será el caso de la fecha, el link, el descuento y el titulo.
+
+# Limpieza de los datos.
+
+A continuación se realiza el tratamiento adecuado para cada una de las variables seleccionadas en función de su naturaleza y tipología:
+
+- Variable *garage*:
+```{r garage}
+df$garage <- as.factor(df$garage)
+kable(table(df$garage))
+```
+
+Se transforma a categórica. El **`r round(prop.table(table(df$garage))[2]*100)`%** de los inmuebles tiene garaje.
+
+- Variable *zone*:
+```{r zone}
+barris <- read_xlsx("..\\data\\barrios barcelona.xlsx")
+df$zone <- ''
+
+for(i in barris$barris){
+  df$zone[grepl(i, df$title)] <- i
+}
+
+tz <- table(df$zone)
+kable(tz[order(tz, decreasing = T)])
+
+df$zone[df$zone == 'Provençals del Poblenou'] <- 'El Poblenou'
+df$zone[df$zone == 'Hostafrancs'] <- 'Sants'
+df$zone[df$zone == 'La Maternitat i Sant Ramon'] <- 'Les Corts'
+df$zone[df$zone == 'El Camp d\'En Grassot i Gràcia Nova'] <- 'Vila de Gràcia'
+df$zone[df$zone == 'El Besòs'] <- 'El Poblenou'
+df$zone[df$zone == 'El Baix Guinardó'] <- 'El Guinardó'
+df$zone[df$zone == 'Les Tres Torres'] <- 'Sant Gervasi'
+df$zone[df$zone == 'Porta'] <- 'Nou Barris'
+df$zone[df$zone == 'El Parc i la Llacuna del Poblenou'] <- 'El Poblenou'
+df$zone[df$zone == 'El Congrés i els Indians'] <- 'Navas'
+df$zone[df$zone == 'La Sagrera'] <- 'Navas'
+df$zone[df$zone == 'La Prosperitat'] <- 'Nou Barris'
+df$zone[df$zone == 'La Salut'] <- 'El Carmel'
+df$zone[df$zone == 'Vilapicina i la Torre Llobeta'] <- 'Nou Barris'
+df$zone[df$zone == 'Sant Martí'] <- 'El Clot'
+df$zone[df$zone == 'Les Roquetes'] <- 'Nou Barris'
+df$zone[df$zone == 'Horta'] <- 'Nou Barris'
+df$zone[df$zone == 'Vallvidrera'] <- 'Sarrià'
+df$zone[df$zone == 'La Bordeta'] <- 'Sants'
+df$zone[df$zone == 'La Verneda i la Pau'] <- 'El Clot'
+df$zone[df$zone == 'La Teixonera'] <- 'El Carmel'
+df$zone[df$zone == 'Montbau'] <- 'El Carmel'
+df$zone[df$zone == 'La Trinitat Vella'] <- 'Nou Barris'
+df$zone[df$zone == 'Vila Olímpica'] <- 'El Poblenou'
+df$zone[df$zone == 'La Marina del Port'] <- 'El Poble Sec'
+df$zone[df$zone == 'La Font d\'En Fargues'] <- 'El Guinardó'
+df$zone[df$zone == 'Verdun'] <- 'Nou Barris'
+df$zone[df$zone == 'La Font de la Guatlla'] <- 'El Poble Sec'
+df$zone[df$zone == 'Can Baró'] <- 'El Guinardó'
+df$zone[df$zone == 'El Coll'] <- 'Vallcarca'
+df$zone[df$zone == 'El Bon Pastor'] <- 'Sant Andreu'
+df$zone[df$zone == 'Torre Baró'] <- 'Nou Barris'
+df$zone[df$zone == 'La Trinitat Nova'] <- 'Nou Barris'
+df$zone[df$zone == 'El Turó de la Peira'] <- 'Nou Barris'
+df$zone[df$zone == 'La Guineueta'] <- 'Nou Barris'
+df$zone[df$zone == 'Zona Franca'] <- 'El Poble Sec'
+df$zone[df$zone == 'Baró de Viver'] <- 'Nou Barris'
+df$zone[df$zone == 'La Clota'] <- 'El Carmel'
+df$zone[df$zone == 'La Marina del Prat Vermell'] <- 'El Poble Sec'
+
+df$zone <- factor(df$zone)
+```
+Para la creación de la variable *zone* nos ayudamos de un diccionario que recoge los barrios de Barcelona. De esta forma, del título de la publicación extraemos el barrio en el que se encuentra el inmueble. Después, las zonas menos representativas se unen a los barrios vecinos con el fin de que el contenido de la variable sea más representativo. Se observa que los barrios con menos de 200 inmuebles en venta se pueden unir a barrios vecinos. Y finalmente, asignamos a la variable el tipo factor.
+
+Se puede observar que la mayor concentración de inmuebles está en la **zona alta y centro** del municipio.
+
+- Variable *floor*:
+```{r floor}
+df$floor[df$floor == ''] <- 'Casa'
+
+tf <- table(df$floor)
+kable(tf[order(tf, decreasing = T)])
+df$floor[df$floor %in% names(tf)[tf < 500]] <- 'Atico'
+
+df$floor <- factor(df$floor)
+```
+Entendemos que los inmuebles dónde no se especifica la planta se tratan de adosados e imputamos así los valores vacios. De la misma forma que el caso anterior, los valores no representativos se agrupan en una única clase. Ya que todos se corresponden a plantas "altas" la llamamos "ático". Y finalmente, asignamos a la variable el tipo factor.
+
+Se puede observar que la mayoría de pisos del dataset se distribuyen entre la **primera y la cuarta planta**.
+
+- El resto de variables ya tienen el tipo de dato que les corresponde.
+
+
+## ¿Los datos contienen ceros o elementos vacíos? ¿Cómo gestionarías cada uno de estos casos? 
+
+Comprobamos qué variables contienen nulos.
+```{r nulos}
+colSums(is.na(df))
+```
+Como se puede observar, únicamente la variable *rooms* contiene nulos. Una buena alternativa, ya que son pocos casos, sería imputar los nulos usando la media de la variable. Pero antes, vamos a tratar los *outliers*.
+
+## Identificación y tratamiento de valores extremos.
+En las variables de tipo categórico que ya se han tratado, las agrupaciones realizadas podrían ser una forma de tratamiento de valores extremos.
+
+El resto de variables se comprueban a continuación:
+```{r outliers}
+boxplot(df$rooms, main = "Distribución variable rooms") 
+boxplot(df$m2, main = "Distribución variable m2")
+boxplot(df$price, main = "Distribución variable price")
+```
+
+Consideraremos un valor extremo ${x}$ es todo aquel que se encuentre fuera del rango: ${mean(x)} \pm {3*sd(x)}$. 
+
+```{r outliers_1}
+remove_outliers <- function(x, limit = 3) {
+  mn <- mean(x, na.rm = T)
+  out <- limit * sd(x, na.rm = T)
+  x < (mn - out) | x > (mn + out)
+}
+```
+
+Ya que sólo se trata de `r nrow(df) - sum(remove_outliers(df$m2, 3)==FALSE | remove_outliers(df$price, 3)==FALSE | remove_outliers(df$rooms, 3)==FALSE)` casos, se eliminan del conjunto de datos.
+
+```{r outliers_2}
+df <- df[remove_outliers(df$m2, 3)==FALSE | 
+           remove_outliers(df$price, 3)==FALSE | 
+           remove_outliers(df$rooms, 3)==FALSE,]
+```
+
+Ahora estamos en disposición de imputar los nulos de la variable *rooms*.
+```{r nulos_1}
+df$rooms[is.na(df$rooms)] <- round(mean(df$rooms, na.rm = T))
+```
+
+
+# Análisis de los datos.
+## Selección de los grupos de datos que se quieren analizar/comparar.
+
+Deshechamos aquellas variables que no vamos a utilizar. 
+```{r deshechar}
+df$date <- NULL
+df$link <- NULL
+df$off <- NULL
+df$title <- NULL
+```
+
+El resto se analizará a continuación.
+
+## Comprobación de la normalidad y homogeneidad de la varianza.
+
+Se comprueba la normalidad de las variables númericas usando el test de Saphiro-Wilk.
+
+```{r saphiro}
+shapiro.test(sample(df$price, 5000))
+shapiro.test(sample(df$m2, 5000))
+shapiro.test(sample(df$rooms, 5000))
+```
+
+Obtenemos que ninguna de las tres variables sigue una distribución normal ya que el p-value siempre es inferior a 0.05, por lo que se rechaza la hipótesis nula. Aunque sabemos que según el teorema del limite central cualquier población con más de 30 observaciones se podría aproximar a una distribución normal de media 0 y desviación estándar 1.
+
+
+Se comprueba la homogeniedad de la varianza usando el test de Levene.
+```{r levene}
+leveneTest(y = df$price, group = df$target, center = "mean")
+leveneTest(y = df$m2, group = df$target, center = "mean")
+leveneTest(y = df$rooms, group = df$target, center = "mean")
+```
+
+El test de Levene indica que las varianzas entre grupos son significativamente distintas para las variables *price* y *m2* ya que el p-value es inferior a 0.05 en ambos casos. Por lo que podemos rechazar la hipótesis nula de homoscedasticidad. Para la variable *rooms* no es tan distinta la varianza entre grupos con un p-value inferior a 0.1 pero no a 0.05. En este caso se tendría que aceptar la hipótesis nula y asegurar la igualdad de las varianzas.
+
+En definitiva, el test de Levene nos está indicando que hay una varianza significativa en el precio de los inmuebles que han sufrido un descuento y de los que no. Además de que hay una varianza significativa en los metros cuadrados de los inmuebles que han sufrido un descuento y de los que no.
+
+## Aplicación de pruebas estadísticas para comparar los grupos de datos.
+
+Antes de la aplicación de técnicas de minería de datos, vamos a comprobar las correlaciones que existen entre las variables categóricas de nuestro dataset con la variable respuesta. Para ello hacemos uso de la siguiente función que nos resume el porcentaje de casos positivos de la variable respuesta exitentes para cada categoría de la variable explicativa.
+
+```{r table.resume}
+table.resume <- function (x, y){
+  t <- table(x, y)
+  N <- t[,1]+t[,2]
+  return(data.frame('y' = t[,2], 'N' = N, 'var' = t[,2]/N))
+}
+```
+
+- Correlación para la variable *garage*:
+```{r table.resume_garage}
+kable(table.resume(df$garage, df$target))
+```
+
+La diferencia entre las correlaciones es del `r round(table.resume(df$garage, df$target)$var[1]-table.resume(df$garage, df$target)$var[2], 2)`%. **Siendo ligeramente mayor para los inmuebles sin garaje**.
+
+- Correlación para la variable *zone*:
+```{r table.resume_zone}
+kable(table.resume(df$zone, df$target))
+```
+
+La zona con mayor porcentaje de pisos con descuento en sus precios iniciales es **`r rownames(table.resume(df$zone, df$target))[which(table.resume(df$zone, df$target)$var == max(table.resume(df$zone, df$target)$var))]`**. Y la zona con menor porcentaje es **`r rownames(table.resume(df$zone, df$target))[which(table.resume(df$zone, df$target)$var == min(table.resume(df$zone, df$target)$var))]`**.
+
+
+- Correlación para la variable *floor*:
+```{r table.resume_floor}
+kable(table.resume(df$floor, df$target))
+```
+
+La planta dónde se encuentran mayor porcentaje de pisos con descuento en sus precios iniciales es **`r rownames(table.resume(df$floor, df$target))[which(table.resume(df$floor, df$target)$var == max(table.resume(df$floor, df$target)$var))]`**. Y con menor porcentaje es **`r rownames(table.resume(df$floor, df$target))[which(table.resume(df$floor, df$target)$var == min(table.resume(df$floor, df$target)$var))]`**.
+
+
+Por lo que, en vista de los resultados obtenidos hasta ahora nos encontramos con base suficiente para pensar que usando un modelo de aprendizaje automático podremos predecir un posible descuento sobre el precio inicial. En ésta linea se particionan los datos en *train* y *test*, se usa la técnica *Random Forest* con todas las variables y se aplica un muestreo relativo a la clase positiva (inmuebles con descuento) para intentar obtener un resultado más robusto.
+
+
+```{r modelo}
+set.seed(0)
+
+r <- nrow(df)
+train_ind <- sample(r, 0.9 * r)
+train <- df[train_ind,]
+test <- df[-train_ind,]
+n <- table(train$target)[[2]]
+
+rf <- randomForest(target~garage+m2+price+rooms+zone+floor,
+                   mtry = length(train)-1, 
+                   importance=TRUE,
+                   sampsize=c(n, n),
+                   data = train)
+```
+
+
+# Representación de los resultados a partir de tablas y gráficas.
+
+Comenzamos revisando el resultado del modelo ejecutado.
+
+```{r rf1}
+rf
+```
+
+En resumen, se destacan dos cosas:
+
+- El *Out Of Bag error* es del `r round(mean(rf$err.rate[,1], 2)*100)`%. Esta métrica se utiliza como validación del modelo, por lo que el *accuracy* del mismo debería ser cercano al `r 100-round(mean(rf$err.rate[,1])*100, 2)`%.
+- La matriz de confusión. Destacar el alto error en la clase positiva: del `r round(rf$confusion[2,3], 2)*100`%. Podría ser debido a que la variable respuesta está muy poco balanceada. También hay que tener en cuenta que, por defecto, el punto de corte está situado en 0.5 y en raras ocasiones es el punto de corte óptimo aunque ésto depende, más bien, del uso que se le quiera dar al modelo.
+
+
+```{r rf2}
+varImpPlot(rf)
+```
+
+Nos fijamos en la gráfica de la derecha: las variables que hacen decrecer el *gini*, ya que el *gini* es invariante al punto de corte y por lo tanto más estable que el *accuracy*. 
+
+Las variables con mayor influencia son *price* y *m2*, precisamente las que anteriormente habiamos destacado por su heterocedasticidad. En un segundo lugar encontramos *zone* y *floor*, en las que habiamos encontrado cierta correlación de alguno de sus grupos con la variable respuesta. Y por último encontramos *rooms* y *garage*, en el caso de la primera el test de Levene ya advertía de su homocedasticidad mientras que la segunda apenas mostraba diferencia entre la correlación de sus valores con la variable respuesta.
+
+Si nos fijamos en la gráfica de la izquierda: las variables que más hacen decrecer el *accuracy* son *zone* y *floor*. Esto lo podriamos interpretar como que la información que proporcionen dichas variables será determinante para establecer que el inmueble no recibirá un descuento ya que la mayoría de las muestras de nuestra población no han recibido un descuento en su precio inicial y el *accuracy* se basa en muestras clasificadas  correctamente.
+
+Para acabar de validar si el resultado obtenido es bueno, vamos a calcular el *gini* del modelo a partir del conjunto de *test* que simularía un conjunto de datos real no usado para entrenar el modelo.
+
+```{r test}
+pred <- predict(rf, test, type = "prob")[,2]
+roc_val <-roc(test$target, pred) 
+gini <- 2*auc(roc_val)-1
+```
+
+El modelo presenta un **Gini del `r round(gini, 2)*100`%**. Por lo tanto se concluye, que es modelo con un buen poder discriminatorio y que clasifica bien. También lo podemos visualizar a partir de la curva ROC.
+```{r roc}
+plot(roc_val,col='blue')
+```
+
+Por último, se presenta la población de *test* segmentada en deciles de probabilidad y el porcentaje de casos acertados para cada tramo.
+
+```{r test_resume}
+kable(table.resume(discretize(pred, "interval", 10), test$target))
+```
+
+De esta forma podriamos determinar de una forma coherente cual sería el punto de corte para considerar que el modelo está dando una respuesta positiva (el inmueble va a bajar de precio) o negativa (el inmueble no va a bajar de precio). Por ejemplo, si este punto de corte teórico lo situaramos en 0.9 podriamos decir que las respuestas positivas proporcionadas por el modelo tendrían un error del 29%, es decir, en este caso estamos minimizando el error tipo 1 (falso positivo).
+
+# Resolución del problema.
+
+Cómo hemos podido observar, existe una clara relación entre los inmuebles que reciben un descuento sobre su precio inicial y sus características principales, tales como el precio, metros cuadrados, zona, habitaciones, planta (en caso de ser un piso), etc.
+En función de estas relaciones, a priori desconocidas, hemos podido generar un modelo *machine learning*. Debido a la cantidad de datos disponible, podemos concluir que el modelo propociona un resultado aceptable a la hora de clasificar **si un inmueble en venta en el municipio de Barcelona va a bajar de precio**. Por lo que se considera que se dá respuesta a la pregunta inicial planteada. Aunque, hay que tener en cuenta que si realizaramos este ejercicio con una cantidad de datos mayor seguramente mejoraría la calidad de la respuesta proporcionada.
+
+
+# Código
+
+Se adjunta el código empleado en la carpeta *code* y los datos necesarios en la carpeta *data*.
+
+# Referencias
+${}^{1}$ https://github.com/dripi/idealista-scraping
